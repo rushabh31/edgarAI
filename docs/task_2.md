@@ -15,11 +15,8 @@ This task processes filings for a specific company across multiple years, genera
 3. [Installation](#installation)
 4. [Dataset](#dataset)
 5. [Detailed Explanation of the Pipeline](#detailed-explanation-of-the-pipeline)
-6. [Usage](#usage)
-7. [Results and Validation](#results-and-validation)
-8. [Key Files](#key-files)
-9. [Contributing](#contributing)
-10. [License](#license)
+6. [Results and Validation](#results-and-validation)
+
 
 ---
 
