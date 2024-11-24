@@ -54,21 +54,34 @@ class DocumentAnalyzer:
         self.logger.info(f"Converted dataset to pandas DataFrame with shape {df.shape}.")
         return df
 
-    def chunk_documents(self, data, chunk_size: int = 500, overlap: int = 50):
-        """Split documents into chunks with overlap."""
-        self.logger.info("Starting document chunking...")
+    def chunk_documents(self, data, model_token_limit: int = 512, overlap_ratio: float = 0.1):
+        """Dynamically split documents into chunks with overlap based on token limits."""
+        self.logger.info("Starting dynamic document chunking...")
+
+        # Identify section columns
         section_cols = [col for col in data.columns if col.startswith('section_')]
         self.logger.info(f"Found {len(section_cols)} section columns for chunking.")
 
-        def create_chunks(text: str, chunk_size: int, overlap: int) -> List[str]:
+        def calculate_chunking(text: str, token_limit: int, overlap_ratio: float) -> List[str]:
+            """Calculate chunks dynamically based on token limit and overlap ratio."""
             words = text.split()
+            token_count = len(words)
             chunks = []
+
+            if token_count <= token_limit:
+                # No chunking required
+                return [text]
+            
+            chunk_size = token_limit
+            overlap = int(chunk_size * overlap_ratio)
             start = 0
+
             while start < len(words):
                 end = start + chunk_size
                 chunk = ' '.join(words[start:end])
                 chunks.append(chunk)
-                start = end - overlap
+                start = end - overlap  # Move forward with overlap
+
             return chunks
 
         schema = StructType([
@@ -84,13 +97,15 @@ class DocumentAnalyzer:
             self.logger.info(f"Processing row with cik: {row['cik']}, year: {row['year']}")
             for section in section_cols:
                 if row[section] and len(str(row[section])) > 0:
-                    chunks = create_chunks(str(row[section]), chunk_size, overlap)
+                    text = str(row[section])
+                    chunks = calculate_chunking(text, model_token_limit, overlap_ratio)
                     self.logger.info(f"Created {len(chunks)} chunks for section {section}.")
                     for i, chunk in enumerate(chunks):
                         chunk_rows.append((row['cik'], row['year'], section, chunk, i))
 
         self.logger.info(f"Total chunks created: {len(chunk_rows)}")
         return self.spark.createDataFrame(chunk_rows, schema)
+
 
     def create_embeddings(self, chunk_df, batch_size: int = 32):
         """Generate embeddings for chunks."""
@@ -276,7 +291,7 @@ if __name__ == "__main__":
 
     # Analyze Documents
     logger.info("Starting document analysis...")
-    chunk_df = analyzer.chunk_documents(spark_df, chunk_size=500, overlap=50)
+    chunk_df = analyzer.chunk_documents(spark_df, model_token_limit=512, overlap_ratio=0.1)
     embedding_df = analyzer.create_embeddings(chunk_df)
     processed_df, pca_features, distances, outliers = analyzer.process_embeddings(embedding_df, n_components=2, n_clusters=5)
     logger.info("Document analysis complete.")
