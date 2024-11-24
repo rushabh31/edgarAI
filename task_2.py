@@ -66,12 +66,42 @@ class EDGARAnalysisSystem:
         self.llm = None
 
     def _setup_logging(self, log_level: int) -> None:
-        """Configure logging for the system."""
-        logging.basicConfig(
-            level=log_level,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
+        """
+        Configure logging to write to both file and console.
+        Sets up two handlers: one for file output and one for console output.
+        """
         self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
+        
+        # Create logs directory if it doesn't exist
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        
+        # Create timestamped log filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"edgar_analysis_{timestamp}.log"
+        
+        # Create formatters for both handlers
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        # Setup file handler
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        
+        # Setup console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(formatter)
+        
+        # Add both handlers to the logger
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        # Log initial message
+        self.logger.info(f"Logging initialized. Log file: {log_file}")
 
     def _create_spark_session(self, app_name: str) -> SparkSession:
         """Create and configure Spark session."""
@@ -502,10 +532,17 @@ class EDGARAnalysisSystem:
             structured_output = {}
             
             for query, result in results.items():
-                # Parse the answer JSON string
-                answer = result.get('answer', '{}')
+                # Extract the inner answer value from the nested JSON
+                raw_answer = result.get('answer', '{"answer": ""}')
+                try:
+                    # Parse the outer JSON string
+                    parsed_outer = json.loads(raw_answer)
+                    # Extract the inner answer value
+                    answer = parsed_outer.get('answer', '')
+                except json.JSONDecodeError:
+                    answer = raw_answer
                 
-                # Structure chunks with metadata and content
+                # Structure chunks with metadata, content, and similarity score
                 chunks = []
                 for chunk in result.get('chunks', []):
                     chunk_data = {
@@ -514,13 +551,17 @@ class EDGARAnalysisSystem:
                             'section_number': chunk['metadata']['section_number'],
                             'year': chunk['metadata']['year']
                         },
-                        'content': chunk['content']
+                        'content': chunk['content'],
+                        'score': chunk.get('score', None)  # Include similarity score if available
                     }
+                    # Remove score if it's None to match original format
+                    if chunk_data['score'] is None:
+                        del chunk_data['score']
                     chunks.append(chunk_data)
                 
                 # Add to final structure
                 structured_output[query] = {
-                    'answer': answer,
+                    'answer': answer,  # Using the extracted inner answer value
                     'chunks': chunks
                 }
             
@@ -533,6 +574,7 @@ class EDGARAnalysisSystem:
                 json.dump(structured_output, f, indent=2)
             
             self.logger.info(f"Saved query results to {file_path}")
+            self.logger.info(structured_output)
             
         except Exception as e:
             self.logger.error(f"Error saving query results: {str(e)}", exc_info=True)
