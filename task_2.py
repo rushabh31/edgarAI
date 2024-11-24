@@ -13,8 +13,10 @@ from langchain_community.llms import Outlines
 from langchain.prompts import PromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from pydantic import BaseModel
+import json
+from pathlib import Path
+from datetime import datetime
 import sys
-
 sys.modules['sqlite3'] = __import__('pysqlite3')
 
 @dataclass
@@ -547,7 +549,8 @@ def main():
         'embedding_model': "sentence-transformers/all-mpnet-base-v2",
         'llm_model': "meta-llama/Llama-3.2-3B-Instruct",
         'persist_dir': "chroma_db",
-        'analysis_year': '2020'
+        'analysis_year': '2020',
+        'results_dir': "analysis_results"
     }
     
     # Sample queries
