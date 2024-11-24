@@ -16,7 +16,8 @@ from langchain.schema.output_parser import StrOutputParser
 import os
 import torch
 from pyspark.sql import functions as F
-
+from langchain_community.llms import Outlines
+from pydantic import BaseModel
 import sys
 sys.modules['sqlite3'] = __import__('pysqlite3')
 
@@ -29,6 +30,9 @@ logger.info("Initializing Spark Session.")
 spark = SparkSession.builder \
     .appName("EDGAR PySpark Task 2") \
     .getOrCreate()
+
+# Global dictionary to store chunks per query
+chunks_per_query = {}
 
 # Step 1: Load the Dataset
 def load_filtered_datasets(years, company_cik):
@@ -211,26 +215,25 @@ def create_vector_store_from_spark(df, model_name, persist_directory):
 
 # Step 5: Setup LLM Pipeline
 def setup_llm_pipeline(model_name):
+
     logger.info(f"Setting up LLM pipeline with model: {model_name}.")
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map='auto')
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    query_pipeline = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        max_new_tokens=200,
-        torch_dtype=torch.float16,
-        device_map="auto"
-    )
+    
+
+    class Response(BaseModel):
+        answer: str
+
+    llm = Outlines(model=model_name, max_new_tokens=100, json_schema=Response)
+    
     logger.info("LLM pipeline setup complete.")
-    return HuggingFacePipeline(pipeline=query_pipeline)
+    
+    return llm
 
 # Step 6: Create Year-Specific Query Pipeline
 def create_year_specific_pipeline(year, vectordb, llm):
     logger.info(f"Creating year-specific query pipeline for year: {year}.")
     def retrieve_with_year_filter(query):
         logger.info(f"Retrieving documents for year: {year}.")
-        retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+        retriever = vectordb.as_retriever(search_kwargs={"k": 200})
         raw_results = retriever.get_relevant_documents(query)
         
         # Filter results by year
@@ -255,6 +258,8 @@ def create_year_specific_pipeline(year, vectordb, llm):
         )
         
         logger.info(f"Combined {len(unique_chunks)} unique chunks into context.")
+        # Store the chunks used for this query
+        chunks_per_query[query] = unique_chunks
         return combined_context  # Return combined context and metadata mapping
 
 
@@ -272,9 +277,6 @@ def create_year_specific_pipeline(year, vectordb, llm):
         **Context:** {context}
 
         **Response (in JSON format):**
-            {{
-                "answer": "<Your Answer Here>"
-            }}
     """
 
     year_specific_prompt = PromptTemplate.from_template(year_specific_template)
@@ -282,8 +284,9 @@ def create_year_specific_pipeline(year, vectordb, llm):
         {"context": retrieve_with_year_filter, "query": RunnablePassthrough()}
         | year_specific_prompt.partial(year=year)
         | llm
-        # | StrOutputParser()
     )
+
+
 
 def run_queries(year_specific_chain, queries):
     logger.info(f"Running multiple queries: {queries}")
@@ -294,7 +297,8 @@ def run_queries(year_specific_chain, queries):
                 query,
                 config={'temperature': 0.3, 'max_new_tokens': 200}
             )
-            results[query] = output.strip()
+            chunks_used = chunks_per_query.get(query, [])
+            results[query] = {'answer': output, 'chunks': chunks_used}
         except Exception as e:
             logger.error(f"Error during query execution for '{query}': {str(e)}")
             results[query] = f"Error: {str(e)}"
@@ -344,11 +348,6 @@ if __name__ == "__main__":
 
         # Run multiple queries
         output = run_queries(year_specific_chain, queries)
-
-        # # Output JSON results
-        # import json
-        # results_json = json.dumps(output, indent=2)
-        # print(results_json)
 
         logger.info(f"Query result: {output}")
     except Exception as e:
